@@ -1,0 +1,78 @@
+
+---
+title: "TidyModels: Performance Metrics for Regression Models"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+library(tidyverse)
+tidymodels_prefer()
+source("ames_snippets.R")
+```
+
+This notebook demonstrates use of the `r pkg(yardstick)` package, a core tidymodels package with the focus of measuring model performance, to compute metrics for regression models. 
+
+Recall that tidymodels prediction functions produce tibbles with columns for the predicted values. These columns have consistent names, and the functions in the `r pkg(yardstick)` package that produce performance metrics have consistent interfaces. The functions are data frame-based, as opposed to vector-based, with the general syntax of: 
+
+```r
+function(data, truth, ...)
+```
+
+where `data` is a data frame or tibble and `truth` is the column with the observed outcome values. The ellipses or other arguments are used to specify the column(s) containing the predictions. 
+
+# Regression Metrics 
+
+To illustrate, let's take the linear regression model that predicts housing prices using the Ames housing dataset. This model is constructed in `ames_snippets.R`. The fitted model `lm_fit` is a linear regression model with a predictor set supplemented with an interaction and spline functions for longitude and latitude. The dependent variable `Sale_Price` has been log transformed. The model was created from a training set named `ames_train`. The data frame `ames_test` consists of `r nrow(ames_test)` properties. To start, let's produce predictions: 
+
+```{r performance-predict-ames}
+ames_test_res <- predict(lm_fit, new_data = ames_test %>% select(-Sale_Price))
+ames_test_res
+```
+
+The predicted numeric outcome from the regression model is named `.pred`. Let's match the predicted values with their corresponding observed outcome values: 
+
+```{r performance-ames-outcome}
+ames_test_res <- bind_cols(ames_test_res, ames_test %>% select(Sale_Price))
+ames_test_res
+```
+
+We see that these values mostly look close but we don't yet have a quantitative understanding of how the model is doing because we haven't computed any performance metrics. Note that both the predicted and observed outcomes are in log10 units. It is best practice to analyze the predictions on the transformed scale (if one were used) even if the predictions are reported using the original units. 
+
+Let's plot the actual and predicted sales prices before computing metrics. We make our points slightly transparent, so that we can notice overplotted points by their darker colors. In the plot, we can see that model tends to predict higher prices than actual prices for low actual price homes (bottom left corner) and tends to predict lower than actual prices for high price homes (top right corner).
+
+```{r performance-ames-plot, eval=FALSE}
+ggplot(ames_test_res, aes(x = Sale_Price, y = .pred)) + 
+  # Create a diagonal line:
+  geom_abline(lty = 2) + 
+  geom_point(alpha = 0.5) + 
+  labs(y = "Predicted Sale Price (log10)", x = "Sale Price (log10)") +
+  # Scale and size the x- and y-axis uniformly:
+  coord_obs_pred()
+```
+
+Let's compute the root mean squared error for this model using the `rmse()` function: 
+
+```{r performance-ames-rmse}
+rmse(ames_test_res, truth = Sale_Price, estimate = .pred)
+```
+
+This shows us the standard format of the output of `r pkg(yardstick)` functions. Metrics for numeric outcomes usually have a value of "standard" for the `.estimator` column. Examples with different values for this column are shown in the next sections.
+
+To compute multiple metrics at once, we can create a _metric set_. Let's add $R^2$ and the mean absolute error: 
+
+```{r performance-metric-set}
+ames_metrics <- metric_set(rmse, rsq, mae)
+ames_metrics(ames_test_res, truth = Sale_Price, estimate = .pred)
+```
+
+This tidy data format stacks the metrics vertically. The root mean squared error and mean absolute error metrics are both on the scale of the outcome (so `log10(Sale_Price)` for our example) and measure the difference between the predicted and observed values. The value for $R^2$ measures the squared correlation between the predicted and observed values, so values closer to one are better.
+
+The `r pkg(yardstick)` package does _not_ contain a function for adjusted $R^2$. This modification of the coefficient of determination is commonly used when the same data used to fit the model are used to evaluate the model. This metric is not fully supported in tidymodels because it is always a better approach to compute performance on a separate data set than the one used to fit the model.  
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 9.

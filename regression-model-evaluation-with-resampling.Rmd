@@ -1,0 +1,145 @@
+
+---
+title: "Regression Model Validation via Bootstrap Resampling"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r libs, include=FALSE}
+library(tidymodels)
+library(tidyverse)
+library(janitor)
+tidymodels_prefer()
+```
+
+Recent work in defect prediction has demonstrated problems with widely used model validation techniques like cross-validation[1]. Model validation techniques may help to counter the risk of unstable performance estimates through built-in repetition (e.g., M bootstrap iterations or k folds of cross-validation). The `out-of-sample bootstrap` validation technique has been shown to produce accurate results with greater stability.
+
+This technique is an enhancement to the ordinary bootstrap. A model is still trained using the drawn bootstrap sample (a sample of size N with replacement), but rather than testing the model on the original sample, the model is instead tested using the rows that do not appear in the bootstrap sample[2]. Approximately 36.8% of the rows do not appear in the bootstrap sample. The entire process is repeated M times and the average out-of-sample performance is reported.
+
+We will apply this technique on the brewing dataset, as discussed in the blog entry at https://juliasilge.com/blog/beer-production/
+
+# Data
+
+We load the data from GitHub and take a look at the most used materials.
+```{r load}
+brewing_materials_raw <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-31/brewing_materials.csv")
+```
+
+```{r}
+brewing_materials_raw %>%
+  count(type, wt = month_current, sort = TRUE)
+```
+
+# Exploratory Data Analysis
+
+Let's look at the usage of inputs to the brewing process over time. Counts appear to done in a different way after 2016 and there seem to be errors in December of 2014 and 2015, so we remove those data points from our plot.
+```{r}
+brewing_filtered <- brewing_materials_raw %>%
+  filter(
+    type %in% c(
+      "Malt and malt products",
+      "Sugar and syrups",
+      "Hops (dry)"
+    ),
+    year < 2016,
+    !(month == 12 & year %in% 2014:2015)
+  ) %>%
+  mutate(
+    date = paste0(year, "-", month, "-01"),
+    date = lubridate::ymd(date)
+  )
+
+brewing_filtered %>%
+  ggplot(aes(date, month_current, color = type)) +
+  geom_point()
+```
+
+Let's reshape the dataset.
+```{r}
+brewing_materials <- brewing_filtered %>%
+  select(date, type, month_current) %>%
+  pivot_wider(
+    names_from = type,
+    values_from = month_current
+  ) %>%
+  janitor::clean_names()
+
+brewing_materials
+```
+
+Let's examine the relationship between malt and sugar inputs.
+```{r}
+brewing_materials %>%
+  ggplot(aes(malt_and_malt_products, sugar_and_syrups)) +
+  geom_smooth(method = "lm") +
+  geom_point()
+```
+
+We can construct a linear model based on this
+```{r}
+beer_fit <- lm(sugar_and_syrups ~ 0 + malt_and_malt_products,
+  data = brewing_materials
+)
+summary(beer_fit)
+```
+
+# Resampling
+
+Create 1000 bootstrap samples. We see these as <split [n/m]> objects in our data frame. Note that the sample size n (the training set) is always the same size, the size of the original dataset. The assessment set m varies in size, as it includes all rows not used in that bootstrap sample.
+```{r}
+set.seed(123)
+beer_boot <- bootstraps(brewing_materials, times = 1e3, apparent = TRUE)
+beer_boot
+```
+
+Train a model on each of the samples.
+```{r}
+beer_models <- beer_boot %>%
+  mutate(
+    model = map(splits, ~ lm(sugar_and_syrups ~ 0 + malt_and_malt_products, data = .)),
+    coef_info = map(model, tidy)
+  )
+beer_models
+```
+
+The coefficients show the strength of the relationship between sugar and malt inputs.
+```{r}
+beer_coefs <- beer_models %>% unnest(coef_info)
+beer_coefs
+```
+
+We can examine the distribution of coefficients using a histogram.
+```{r}
+beer_coefs %>%
+  ggplot(aes(estimate)) +
+  geom_histogram(alpha = 0.7, fill = "cyan3")
+```
+
+Let's compute a 95% confidence interval for the value of the coefficient.
+```{r}
+int_pctl(beer_models, coef_info)
+```
+
+We can also visualize some of these fits to the bootstrap resamples. We'll pick a random sample of 200 of the bootstrap samples. First, let’s use augment() to get the fitted values for each resampled data point.
+```{r}
+beer_aug <- beer_models %>%
+  sample_n(200) %>%
+  mutate(augmented = map(model, augment)) %>%
+  unnest(augmented)
+
+beer_aug
+```
+
+```{r}
+ggplot(beer_aug, aes(malt_and_malt_products, sugar_and_syrups)) +
+  geom_line(aes(y = .fitted, group = id), alpha = .2, col = "cyan3") +
+  geom_point()
+```
+
+# References
+
+  1. Tantithamthavorn, Chakkrit, et al. "An empirical comparison of model validation techniques for defect prediction models." IEEE Transactions on Software Engineering 43.1 (2016): 1-18.
+  2. B. Efron, "Estimating the error rate of a prediction rule: Some improvements on cross-validation," J. Amer. Statist. Assoc., vol. 78, no. 382, pp. 316–331, 1983.
+  3. Julia Silge, "Bootstrap resampling with #TidyTuesday beer production data." https://juliasilge.com/blog/beer-production/
+  4. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 10. https://www.tmwr.org/resampling.html

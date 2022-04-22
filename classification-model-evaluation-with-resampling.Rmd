@@ -1,0 +1,192 @@
+
+---
+title: "Classification Models with Resampling Evaluation"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+library(tidymodels)
+library(tidyverse)
+tidymodels_prefer()
+library(skimr)
+library(doMC)
+registerDoMC(cores = parallel::detectCores())
+```
+
+In this notebook, we use bootstrap resampling to evaluate performance of a binary classification model. We will compare model performance estimates computed using bootstrap resampling those estimates computed using cross-validation.
+
+A bootstrap sample is a random sample taken with replacement, i.e., observations can be included multiple times in a single bootstrap sample. Bootstrap samples are typically the same size as the original dataset. Approximately 63.2% of the original observations end up in the bootstrap sample. The remaining 36.8% of the observations are often called the "out of bag" (OOB) samples.
+
+To use bootstrap sampling to evaluate the performance of amodel, we:
+
+  1. Create B bootstrap samples from the original dataset.
+  2. For each sample b in B
+       1. Train (fit) the model on the bootstrap sample b.
+       2. Evaluate model performance using the associated OOB sample.
+  3. Compute the mean and standard error of the metric over all B samples.
+
+The mean is the estimate of model performance, while the standard error provides a measure of variance around that estimate.
+
+# Data
+
+We use the Cleveland heart disease dataset from Kaggle. The original version was from the UCI archive of machine learning datasets.
+
+```{r data}
+disease <- read_csv('data/heart_cleveland_upload.csv')
+disease <- disease %>% 
+  mutate(disease = as.factor(if_else(condition == 0, "no", "yes")),
+         sex = as.factor(if_else(sex == 0, "female", "male")),
+         fbs = as.factor(if_else(fbs == 0, "normal", "elevated")),
+         exer_ang = as.factor(if_else(exang == 0, "no", "yes")),
+         exer_st_slope = as.factor(dplyr::recode(slope, `0` = "upslope", `1` = "flat", `2` = "downslope")),
+         cp = as.factor(dplyr::recode(cp, `0` = "typ_angina", `1` = "atyp_angina", `2` = "non_anginal", `3` = "asymptomatic")),
+         rest_ecg = as.factor(dplyr::recode(restecg, `0` = "normal", `1` = "wave_abnormality", `2` = "ventric_hypertrophy")),
+         thal = as.factor(dplyr::recode(thal, `0` = "normal", `1` = "fixeddefect", `2` = "reversabledefect"))) %>% 
+  select(!c(condition, exang, slope, restecg)) %>%
+  glimpse()
+```
+
+We can explore the data with the `skimrc` package.
+```{r skim_data}
+skim(disease)
+```
+
+# Setup a logistic regression model without fitting
+
+Create the recipe for predicting heart disease status.
+```{r}
+disease_recipe  <- recipe(disease ~ ., data = disease) %>%
+    step_dummy(all_nominal(), -all_outcomes())
+```
+
+Create a metric set with accuracy, precision, and recall.
+```{r}
+disease_metrics  <- metric_set(accuracy, precision, recall, roc_auc)
+```
+
+Create a logistic regression model and its workflow.
+```{r lrmodel}
+lrmodel <- logistic_reg() %>% 
+    set_engine("glm") %>%
+    set_mode('classification')
+
+lrworkflow <- workflow() %>%
+    add_recipe(disease_recipe) %>%
+    add_model(lrmodel)
+```
+
+
+# Bootstrap Resampling
+
+Create 100 bootstrap resamples of the entire dataset.
+```{r bootstraps}
+set.seed(1025)
+boot_samples <- disease %>% 
+  bootstraps(times = 100, strata = "disease") 
+boot_samples
+```
+
+Fit the model on the bootstrap resamples.
+```{r}
+lrfits <- lrworkflow %>%
+  fit_resamples(resamples = boot_samples, metrics = disease_metrics)
+  # fit_resamples(resamples = boot_samples, metrics = metric_set(accuracy))
+```
+
+View the metrics on each bootstrap sample.
+```{r}
+metrics_boot <- collect_metrics(lrfits, summarize=FALSE)
+metrics_boot
+```
+
+Compute the mean performance and its standard error.
+```{r}
+collect_metrics(lrfits)
+```
+
+View a histogram of bootstrap sample accuracy. Similar plots can be constructed for precision and recall.
+```{r}
+metrics_boot %>% 
+    filter(.metric == "accuracy") %>%
+    ggplot() +
+    geom_histogram(aes(x=.estimate, y=stat(count)), bins=10)
+```
+
+# Cross-Validation
+
+Create 10 folds for 10-fold cross validation. The dataset is split into 10 folds, then 10 training/test set splits are created. Each fold appears once as the test set, with the other 9 folds (90% of the data) used as the training set.
+```{r}
+set.seed(1025)
+kfolds <- disease %>% 
+  vfold_cv(v = 10, repeats = 1, strata = "disease")
+kfolds
+```
+
+Fit 10 logistic regression models, one for each split.
+```{r}
+lr_kfolds <- lrworkflow %>%
+  fit_resamples(resamples = kfolds, metrics = disease_metrics)
+```
+
+View the metrics on each bootstrap sample.
+```{r}
+metrics_kfolds <- collect_metrics(lr_kfolds, summarize=FALSE)
+metrics_kfolds
+```
+
+Compute the mean performance and its standard error.
+```{r}
+collect_metrics(lr_kfolds)
+```
+
+View a histogram of bootstrap sample performance, with density plot.
+```{r}
+metrics_kfolds %>% 
+    filter(.metric == "accuracy") %>%
+    ggplot() +
+    geom_histogram(aes(x=.estimate, y=stat(count)), bins=30) +
+    geom_density(aes(x=.estimate))
+```
+
+# Repeated Cross-Validation
+
+Repeated cross-validation repeats k-fold cross validation process multiple times with new splits. For each repeat, a new set of k splits is computed. The total number of models evaluated is the number of repeats times k.
+```{r}
+set.seed(1025)
+repeatkfolds <- disease %>% 
+  vfold_cv(v = 10, repeats = 10, strata = "disease")
+repeatkfolds
+```
+
+Fit 100 logistic regression models, one for each split.
+```{r}
+lr_repeatkfolds <- lrworkflow %>%
+  fit_resamples(resamples = repeatkfolds, metrics = disease_metrics)
+```
+
+View the metrics on each bootstrap sample.
+```{r}
+metrics_repeatkfolds <- collect_metrics(lr_repeatkfolds, summarize=FALSE)
+metrics_repeatkfolds
+```
+
+Compute the mean performance and its standard error. Note that the standard error is smaller than the standard error for non-repeated cross validation, though larger than that for bootstrap validation.
+```{r}
+collect_metrics(lr_repeatkfolds)
+```
+
+View a histogram of bootstrap sample performance, with density plot.
+```{r}
+metrics_repeatkfolds %>% 
+    filter(.metric == "accuracy") %>%
+    ggplot() +
+    geom_histogram(aes(x=.estimate, y=stat(count)), bins=10) +
+    geom_density(aes(x=.estimate))
+```
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 10.
+  2. Cherngs. Heart Disease Cleveland UCI. https://www.kaggle.com/datasets/cherngs/heart-disease-cleveland-uci

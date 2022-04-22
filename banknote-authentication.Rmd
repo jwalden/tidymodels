@@ -1,0 +1,193 @@
+---
+title: "TidyModels: banknote authentication"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r libs, include=FALSE}
+library(tidymodels)
+library(tidyverse)
+library(workflows)
+library(tune)
+```
+
+We're going to use R's `tidymodels` package to determine whether banknotes are forgeries or not in this example. For learning more about this package, I recommend starting at https://www.tidymodels.org/start/.
+
+# Data
+
+The banknotes dataset contains information about one banknote per row, with four floating point features (variance, skewness, kurtosis, and entropy) and a feature named forgery which is 1 if the banknote is a forgery and 0 if it is not. This dataset is from the UCI machine learning dataset repository and can be found at https://archive.ics.uci.edu/ml/datasets/banknote+authentication.
+
+```{r}
+banknotes <- read_csv('data/banknote-authentication.csv', col_types='ddddf')
+banknotes
+```
+
+# Exploratory Data Analysis
+
+Let's how many 0s and 1s are in the Forgery column to see how many forgeries and legitimate banknotes are in the dataset. While the numbers of each type of banknote are not equal, they are not tremendously different as is so often the case in software security.
+
+```{r}
+banknotes_summary <- summary(factor(banknotes$Forgery))
+banknotes_summary
+```
+
+The proportion of forged banknotes is 44.5%.
+```{r}
+round(100*banknotes_summary[2]/nrow(banknotes), 1)
+```
+
+Let's take a look at numerical summaries of the image features. These features were derived from a wavelet transformed image taken from a digital photograph of the banknotes.
+
+```{r}
+banknotes %>% select(-Forgery) %>% summary
+```
+
+We can visualize these summaries plus outlier information with boxplots. We transform the data to tidy format, with each row having a single measurement, using the `pivot_longer()` function, so we can graph the boxplots together.
+
+```{r}
+banknotes_long <- banknotes %>% pivot_longer(-Forgery,
+                    names_to = "Feature",
+                    values_to = "Value")
+ggplot(banknotes_long, aes(x=Feature, y=Value)) + geom_boxplot()
+```
+
+# Split data for training and testing
+
+First, let's split our dataset into training and testing data. The training data will be used to fit our model, while the testing data will be used to evaluate our final model's performance. We set the seed for the random generator, so that the split is identical each time we run this notebook. 
+
+```{r test_train_data}
+set.seed(3)
+# split the data into training (75%) and testing (25%)
+banknotes_split <- initial_split(banknotes, prop = 3/4)
+banknotes_split
+```
+
+We can extract training and testing sets.
+```{r}
+banknotes_train <- training(banknotes_split)
+banknotes_test <- testing(banknotes_split)
+banknotes_train
+```
+
+Let's compare the proportions of authentic and forged banknotes in the training and test sets.
+```{r}
+train_summary <- summary(factor(banknotes_train$Forgery))
+test_summary <- summary(factor(banknotes_test$Forgery))
+data.frame(train=train_summary, test=test_summary)
+```
+
+The proportion of forged banknotes is 44.8% in the train set and 43.4% in the test set.
+```{r}
+train_forged <- round(100*train_summary[2]/nrow(banknotes_train), 1)
+test_forged <- round(100*test_summary[2]/nrow(banknotes_test), 1)
+c(train_forged, test_forged)
+```
+
+If we wanted the proportions to be identical between the training and test data sets, we can add the `strata` argument to conduct stratified sampling. 
+
+```{r}
+set.seed(3)
+banknotes_split <- initial_split(banknotes, prop = 3/4, strata = "Forgery")
+banknotes_split
+```
+
+To verify that the proportions are identical, we extract the training and test datasets and compute the proportions as above. We find the training and test proportions to be identical to 3 figures (44.466% versus 44.4444%). A slight difference will result if the number of forged notes isn't a multiple of the denominator of the proportion fraction we used for splitting the data.
+
+```{r}
+banknotes_train <- training(banknotes_split)
+banknotes_test <- testing(banknotes_split)
+
+train_summary <- summary(factor(banknotes_train$Forgery))
+test_summary <- summary(factor(banknotes_test$Forgery))
+
+train_forged <- round(100*train_summary[2]/nrow(banknotes_train), 3)
+test_forged <- round(100*test_summary[2]/nrow(banknotes_test), 3)
+c(train_forged, test_forged)
+```
+
+# Define a recipe
+
+Recipes allow you to specify the role of each variable as an outcome or predictor variable using an R formula, and any pre-processing steps you want to conduct, such as normalization, missing value imputation, principal component analysis, etc.
+
+```{r formula_and_preprocessing}
+banknotes_recipe <- recipe(Forgery ~ Variance + Skewness + Kurtosis + Entropy,
+         data = banknotes)
+```
+
+# Specify the model
+
+Parsnip provides a unified interface for a wide variety of machine learning techniques found in the Comprehensive R Archive Network (CRAN). Instead of learning how each R library works, you only have to learn a single way to specify a model. It's also easy to change the modeling type by changing a single line of code.
+
+You can find a list of supported model types at https://www.tidymodels.org/find/parsnip/. We will start with logistic regression, which is the classification
+
+```{r}
+banknotes_model <- 
+  # specify the machine learning model type
+  logistic_reg() %>%
+  # select the package (engine) that implements the model
+  set_engine("glm") %>%
+  # choose either regression or binary classification mode
+  set_mode("classification") 
+banknotes_model
+```
+
+# Put model and recipe together in a workflow
+
+```{r}
+banknotes_workflow <- workflow() %>%
+  # add the recipe
+  add_recipe(banknotes_recipe) %>%
+  # add the model
+  add_model(banknotes_model)
+banknotes_workflow
+```
+
+# Fit the model
+
+This `fit()` function trains the model specified by the workflow using the specified data, which in our case is the training data created above.
+
+```{r}
+banknotes_fit <- banknotes_workflow %>%
+  fit(data = banknotes_train)
+banknotes_fit
+```
+
+If we want to work with the model fit in a convenient format, we can extract it as a tibble as follows. The data frame contains not just the fitted coefficients (estimates), but also their standard error, t-statistic, and p-value for a hypothesis test with a null hypothesis that a predictor has no effect (i.e., has a coefficient of zero.)
+
+```{r}
+banknotes_fit_df <- banknotes_fit %>% pull_workflow_fit() %>% tidy()
+banknotes_fit_df
+```
+
+# Evaluate the model on the test set
+
+We can make predictions on the test set using the `predict()` function and compare them with the actual defect status of each module from our testing dataset.
+```{r}
+predict(banknotes_fit, banknotes_test) %>% 
+    bind_cols(select(banknotes_test, Forgery))
+```
+
+This function can also provide the probability values produced by the logistic regression model. We can put the probabilities together in a tibble with the predicted and actual defect status.
+```{r}
+banknotes_pred <- predict(banknotes_fit, banknotes_test) %>%
+    bind_cols(predict(banknotes_fit, banknotes_test, type = "prob")) %>%
+    bind_cols(select(banknotes_test, Forgery))
+banknotes_pred
+```
+
+We can compute the accuracy from this tibble. It's almost 99%, which we're unlikely to see often.
+```{r}
+banknotes_pred %>% accuracy(truth=Forgery, .pred_class)
+```
+
+We can view the ROC curve based on this data, which shows a nigh perfect model.
+```{r}
+banknotes_pred %>%
+    roc_curve(truth = Forgery, .pred_0) %>%
+    autoplot()
+```
+
+# On Your Own
+
+Perform banknote classification using a random forest model instead of the logistic regression model we created above.

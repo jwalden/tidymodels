@@ -1,0 +1,98 @@
+
+---
+title: "TidyModels: Performance Metrics for Classification Models"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+knitr::opts_chunk$set(fig.path = "figures/")
+library(tidymodels)
+library(tidyverse)
+tidymodels_prefer()
+```
+
+This notebook demonstrates classification metrics with the `r pkg(yardstick)` package, a core tidymodels package with the focus of measuring model performance. Recall that tidymodels prediction functions produce tibbles with columns for the predicted values. These columns have consistent names, and the functions in the `r pkg(yardstick)` package that produce performance metrics have consistent interfaces. The functions are data frame-based, as opposed to vector-based, with the general syntax of: 
+
+```r
+function(data, truth, ...)
+```
+
+where `data` is a data frame or tibble and `truth` is the column with the observed outcome values. The ellipses or other arguments are used to specify the column(s) containing the predictions. 
+
+# Binary Classification Metrics 
+
+The `r pkg(modeldata)` package (another one of the tidymodels packages) contains example predictions from a test data set with two classes ("Class1" and "Class2"):
+
+```{r performance-two-class-example}
+data(two_class_example)
+tibble(two_class_example)
+```
+
+The second and third columns are the predicted class probabilities for the test set while `predicted` are the discrete predictions. 
+
+For the hard class predictions, there are a variety of `r pkg(yardstick)` functions that are helpful: 
+
+A confusion matrix: 
+```{r performance-class-metrics}
+conf_mat(two_class_example, truth = truth, estimate = predicted)
+```
+
+Accuracy:
+```{r}
+accuracy(two_class_example, truth, predicted)
+```
+
+Matthews correlation coefficient:
+```{r}
+mcc(two_class_example, truth, predicted)
+```
+
+The F1 metric is the harmonic mean of precision and recall:
+```{r}
+f_meas(two_class_example, truth, predicted)
+```
+
+Use metric_set() to compute multiple metrics at once:
+```{r}
+classification_metrics <- metric_set(accuracy, mcc, f_meas)
+classification_metrics(two_class_example, truth = truth, estimate = predicted)
+```
+
+The Matthews correlation coefficient and F1 score both summarize the confusion matrix, but compared to `mcc()` which measures the quality of both positive and negative examples, the `f_meas()` metric emphasizes the positive class, i.e., the event of interest. For binary classification data sets like this example, `r pkg(yardstick)` functions have a standard argument called `event_level` to distinguish positive and negative levels. The default (which we used in this code) is that the *first* level of the outcome factor is the event of interest.
+
+As an example where the second level is the event: 
+
+```{r performance-2nd-level}
+f_meas(two_class_example, truth, predicted, event_level = "second")
+```
+
+In this output, the `.estimator` value of "binary" indicates that the standard formula for binary classes will be used. 
+
+There are numerous classification metrics that use the predicted probabilities as inputs rather than the hard class predictions. For example, the receiver operating characteristic (ROC) curve computes the sensitivity and specificity over a continuum of different event thresholds. The predicted class column is not used. There are two `r pkg(yardstick)` functions for this method: `roc_curve()` computes the data points that make up the ROC curve and `roc_auc()` computes the area under the curve. 
+
+The interfaces to these types of metric functions use the `...` argument placeholder to pass in the appropriate class probability column. For two-class problems, the probability column for the event of interest is passed into the function:
+
+```{r performance-2class-roc}
+two_class_curve <- roc_curve(two_class_example, truth, Class1)
+two_class_curve
+```
+
+```{r performance-2class-roc-auc-measure}
+roc_auc(two_class_example, truth, Class1)
+```
+
+The `two_class_curve` object can be used in a `ggplot` call to visualize the curve, as shown in Figure \@ref(fig:example-roc-curve). There is an `autoplot()` method that will take care of the details:
+
+```{r performance-2class-roc-curve, eval=FALSE}
+autoplot(two_class_curve)
+```
+
+If the curve was close to the diagonal line, then the model’s predictions would be no better than random guessing. Since the curve is up in the top, left-hand corner, we see that our model performs well at different thresholds. 
+
+There are a number of similar functions that use probability estimates, including `gain_curve()`, `lift_curve()`, and `pr_curve()`. 
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 9.
