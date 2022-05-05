@@ -1,0 +1,96 @@
+
+---
+title: "Tidy Modeling with R: Chapter 7 (Workflows)"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+library(tidymodels)
+library(tidyverse)
+tidymodels_prefer()
+```
+
+This notebook works through the contents of chapter 7 of the book TMWR on model workflows. Workflows encourage good methodology since they provide a single point of entry to the estimation components of a modeling process.  Second, it enables the user to improve project organization.
+
+The data used is the Ames house sale price dataset, which is available from the `tidymodels` package.
+```{r data}
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+```
+
+# Simple Linear Regression Workflow
+
+A workflow always requires a `parsnip` model object, so we create a linear regression model with `parsnip`.
+```{r}
+ames_lm <-
+    linear_reg() %>%
+    set_engine("lm")
+```
+
+Let's add the model to a workflow.
+```{r}
+ames_workflow <- 
+    workflow() %>%
+    add_model(ames_lm)
+ames_workflow
+```
+
+We can add formula via the `add_formula()` method.
+```{r}
+ames_workflow <-
+    ames_workflow %>%
+    add_formula(Sale_Price ~ Longitude + Latitude)
+ames_workflow
+```
+
+We can then fit the model through the workflow object.
+```{r}
+lm_fit <- fit(ames_workflow, ames_train)
+tidy(lm_fit)
+```
+
+Once a workflow has been fitted, we can use it to make predictions.
+```{r}
+predict(lm_fit, ames_test %>% slice(1:3))
+```
+
+Both the model and preprocessor (formula) can be removed or updated. Note that the previous fitted model was removed from the workflow object, as the new formula is inconsistent with it.
+```{r}
+lm_fit %>% update_formula(Sale_Price ~ Longitude)
+```
+
+# Evaluating the Test Set
+
+Let's say that we've concluded our model development and have settled on a final model. There is a convenience function called `last_fit()` that will fit the model to the entire training set and evaluate it with the testing set.
+```{r}
+final_lm_res <- last_fit(ames_workflow, ames_split)
+final_lm_res
+```
+
+The `.workflow` column contains the fitted workflow and can be pulled out of the results using:
+
+```{r}
+fitted_lm_wflow <- extract_workflow(final_lm_res)
+```
+
+Similarly, `collect_metrics()` and `collect_predictions()` provide access to the performance metrics and predictions, respectively.
+
+```{r}
+collect_metrics(final_lm_res)
+```
+
+```{r}
+collect_predictions(final_lm_res) %>% slice(1:5)
+```
+
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 7. https://www.tmwr.org/workflows.html (2022)
