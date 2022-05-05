@@ -1,0 +1,141 @@
+
+---
+title: "Tidy Modeling with R: Chapter 6 (Fitting Models with Parsnip)"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+library(tidymodels)
+library(tidyverse)
+tidymodels_prefer()
+```
+
+This notebook works through the contents of chapter 6 of the book TMWR on fitting models with Parsnip.
+
+The data used is the Ames house sale price dataset, which is available from the `tidymodels` package.
+```{r data}
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+```
+
+# Linear Regression with Parsnip
+
+We construct a linear regression model object.
+```{r}
+ames_lm <-
+    linear_reg() %>%
+    set_engine("lm")
+```
+
+We can view the call to the underlying object using the `translate()` method.
+```{r}
+translate(ames_lm)
+```
+
+We can fit it using a formula via the `fit()` method.
+```{r}
+ames_form_fit <-
+    ames_lm %>%
+    fit(Sale_Price ~ Longitude + Latitude, data = ames_train)
+tidy(ames_form_fit)
+```
+
+We can also fit the model using data via the `fit_xy()` method, where `x` is a tibble contain the independent variables (features) and `y` is a vector containing the dependent variable (response).
+```{r}
+ames_xy_fit <-
+    ames_lm %>%
+    fit_xy(
+        x = ames_train %>% select(Longitude, Latitude),
+        y = ames_train %>% pull(Sale_Price)
+    )
+tidy(ames_xy_fit)
+```
+
+The two methods produce exactly the same coefficients and associated statistics.
+```{r}
+all( tidy(ames_xy_fit) == tidy(ames_form_fit) )
+```
+
+# Random Forest Regression Example
+
+We can construct a random forest regression model object using the same approach as we used for the linear regression, though we do need to call `set_mode()` to indicate that we're using the random forest model for regression rather than classification. 
+
+We also specify two hyperparameters, the number of trees, and the number of data points required to make a split in a tree. Parsnip creates standard names for hyperparameters, so we would use the same names for `randomForest` as we do for `ranger` below.
+```{r}
+ames_rf <-
+    rand_forest(trees = 1000, min_n = 5) %>%
+    set_engine("ranger") %>%
+    set_mode("regression")
+```
+
+We can view the call to the underlying object using the `translate()` method.
+```{r}
+translate(ames_rf)
+```
+
+# Extracting the Underlying Model
+
+We can use `extract_fit_engine()` to obtain the fitted model object from the Parsnip object.
+```{r}
+ames_form_fit %>% extract_fit_engine()
+```
+
+This allows us to call methods on the underlying object like the linear model's `summary()` function.
+```{r}
+ames_form_fit %>% extract_fit_engine() %>% summary()
+```
+
+We can get just the coefficients too.
+```{r}
+ames_form_fit %>% extract_fit_engine() %>% summary() %>% coef()
+```
+
+However, the coefficients are stored in a matrix and the methods to get the fitted model parameters vary from model to model. To obtain model paramet `broom` package's `tidy()` method provides a standard way to get model parameters as a tibble from any type of model.
+```{r}
+tidy(ames_form_fit)
+```
+
+
+# Making Predictions with Parsnip
+
+We use `predict()` function to use the fitted model to make predictions on new data. The output is a tibble with the predictions.
+```{r}
+ames_test_small <- ames_test %>% slice(1:5)
+predict(ames_form_fit, new_data = ames_test_small)
+```
+
+As the order of rows is the same as the original dataset, it's easy to add columns with additional data, such as the actual sale price and 95% confidence intervals.
+
+```{r}
+ames_test_small %>% 
+  select(Sale_Price) %>% 
+  bind_cols(predict(ames_form_fit, ames_test_small)) %>% 
+  bind_cols(predict(ames_form_fit, ames_test_small, type = "pred_int")) 
+```
+
+Predictions work the same way for all model types, as we can see with this regression tree model for the Ames housing dataset.
+```{r}
+tree_model <- 
+  decision_tree(min_n = 2) %>% 
+  set_engine("rpart") %>% 
+  set_mode("regression")
+
+tree_fit <- 
+  tree_model %>% 
+  fit(Sale_Price ~ Longitude + Latitude, data = ames_train)
+
+ames_test_small %>% 
+  select(Sale_Price) %>% 
+  bind_cols(predict(tree_fit, ames_test_small))
+```
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 6. https://www.tmwr.org/models.html (2022)
