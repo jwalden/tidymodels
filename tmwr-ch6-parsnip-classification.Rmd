@@ -1,0 +1,153 @@
+
+---
+title: "Tidy Modeling with R: Chapter 6 (Parsnip Classification)"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+library(tidymodels)
+library(tidyverse)
+library(modeldata)
+tidymodels_prefer()
+```
+
+Chapter 6 of the book TMWR focuses on fitting regression models with Parsnip. In this notebook, we examine how to fit a classification model.
+
+The data used is the Watson job attrition dataset, which is available from the `modeldata` package.
+```{r data}
+data(attrition)
+glimpse(attrition)
+```
+
+We split the data 80/20 into training and test sets, stratified by the outcome variable `Attrition`.
+```{r split}
+set.seed(502)
+a_split <- initial_split(attrition, prop = 0.80, strata = Attrition)
+a_train <- training(a_split)
+a_test  <-  testing(a_split)
+```
+
+# Logistic Regression with Parsnip
+
+We construct a linear regression model object.
+```{r}
+a_lm <-
+    logistic_reg() %>%
+    set_engine("glm")
+```
+
+We can view the call to the underlying object using the `translate()` method.
+```{r}
+translate(a_lm)
+```
+
+We can fit it using a formula via the `fit()` method.
+```{r}
+a_form_fit <-
+    a_lm %>%
+    fit(Attrition ~ ., data = a_train)
+tidy(a_form_fit)
+```
+
+We can also fit the model using data via the `fit_xy()` method, where `x` is a tibble contain the independent variables (features) and `y` is a vector containing the dependent variable (response).
+```{r}
+a_xy_fit <-
+    a_lm %>%
+    fit_xy(
+        x = a_train %>% select(-Attrition),
+        y = a_train %>% pull(Attrition)
+    )
+tidy(a_xy_fit)
+```
+
+The two methods produce exactly the same coefficients and associated statistics.
+```{r}
+all( tidy(a_xy_fit) == tidy(a_form_fit) )
+```
+
+# Random Forest Classification Example
+
+We can construct a random forest classification model object using the same approach as we used for the logistic regression model.
+
+We specify two hyperparameters, the number of trees, and the number of data points required to make a split in a tree. Parsnip creates standard names for hyperparameters, so we would use the same names for `randomForest` as we do for `ranger` below.
+```{r}
+a_rf <-
+    rand_forest(trees = 1000, min_n = 5) %>%
+    set_engine("ranger") %>%
+    set_mode("classification")
+```
+
+We can view the call to the underlying object using the `translate()` method.
+```{r}
+translate(a_rf)
+```
+
+We can fit the random forest model using a formula via the `fit()` method.
+```{r}
+a_form_fit <-
+    a_rf %>%
+    fit(Attrition ~ ., data = a_train)
+tidy(a_form_fit)
+```
+
+# Extracting the Underlying Model
+
+We can use `extract_fit_engine()` to obtain the fitted model object from the Parsnip object.
+```{r}
+a_form_fit %>% extract_fit_engine()
+```
+
+This allows us to call methods on the underlying object like the linear model's `summary()` function.
+```{r}
+a_form_fit %>% extract_fit_engine() %>% summary()
+```
+
+We can get just the coefficients too.
+```{r}
+a_form_fit %>% extract_fit_engine() %>% summary() %>% coef()
+```
+
+However, the coefficients are stored in a matrix and the methods to get the fitted model parameters vary from model to model. To obtain model paramet `broom` package's `tidy()` method provides a standard way to get model parameters as a tibble from any type of model.
+```{r}
+tidy(a_form_fit)
+```
+
+# Making Predictions with Parsnip
+
+We use `predict()` function to use the fitted model to make predictions on new data. The output is a tibble with the predictions.
+```{r}
+a_test_small <- a_test %>% slice(1:5)
+predict(a_form_fit, new_data = a_test_small)
+```
+
+As the order of rows is the same as the original dataset, it's easy to add columns with additional data, such as the actual sale price and 95% confidence intervals.
+
+```{r}
+a_test_small %>% 
+  select(Sale_Price) %>% 
+  bind_cols(predict(a_form_fit, a_test_small)) %>% 
+  bind_cols(predict(a_form_fit, a_test_small, type = "pred_int")) 
+```
+
+Predictions work the same way for all model types, as we can see with this regression tree model for the Ames housing dataset.
+```{r}
+tree_model <- 
+  decision_tree(min_n = 2) %>% 
+  set_engine("rpart") %>% 
+  set_mode("regression")
+
+tree_fit <- 
+  tree_model %>% 
+  fit(Sale_Price ~ Longitude + Latitude, data = a_train)
+
+a_test_small %>% 
+  select(Sale_Price) %>% 
+  bind_cols(predict(tree_fit, a_test_small))
+```
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 6. https://www.tmwr.org/models.html (2022)
+  2. https://parsnip.tidymodels.org/reference/logistic_reg.html
