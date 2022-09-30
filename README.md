@@ -12,6 +12,13 @@ R
 > renv::restore()
 ```
 
+Note that packages were installed using [https://github.com/r-lib/pak](pak).
+To install a new package, use
+
+```
+pak::pkg_install("ggplot2")
+```
+
 ## Using with Docker
 
 `Dockerfile` describes a docker image based on the `rocker/tidyverse` version 4.2.1 image from the [https://rocker-project.org/](Rocker Project). To build the image, run
