@@ -31,11 +31,12 @@ a_test  <-  testing(a_split)
 
 # Logistic Regression with Parsnip
 
-We construct a linear regression model object.
+We construct a logistic regression model object.
 ```{r}
 a_lm <-
     logistic_reg() %>%
-    set_engine("glm")
+    set_engine("glm") %>%
+    set_mode("classification")
 ```
 
 We can view the call to the underlying object using the `translate()` method.
@@ -122,28 +123,28 @@ a_test_small <- a_test %>% slice(1:5)
 predict(a_form_fit, new_data = a_test_small)
 ```
 
-As the order of rows is the same as the original dataset, it's easy to add columns with additional data, such as the actual sale price and 95% confidence intervals.
+As the order of rows is the same as the original dataset, it's easy to add columns with additional data, such as the actual classification and predicted probability for each class.
 
 ```{r}
 a_test_small %>% 
-  select(Sale_Price) %>% 
+  select(Attrition) %>% 
   bind_cols(predict(a_form_fit, a_test_small)) %>% 
-  bind_cols(predict(a_form_fit, a_test_small, type = "pred_int")) 
+  bind_cols(predict(a_form_fit, a_test_small, type = "prob")) 
 ```
 
-Predictions work the same way for all model types, as we can see with this regression tree model for the Ames housing dataset.
+Predictions work the same way for all model types, as we can see with this regression tree model.
 ```{r}
 tree_model <- 
   decision_tree(min_n = 2) %>% 
   set_engine("rpart") %>% 
-  set_mode("regression")
+  set_mode("classification")
 
 tree_fit <- 
   tree_model %>% 
-  fit(Sale_Price ~ Longitude + Latitude, data = a_train)
+  fit(Attrition ~ ., data = a_train)
 
 a_test_small %>% 
-  select(Sale_Price) %>% 
+  select(Attrition) %>% 
   bind_cols(predict(tree_fit, a_test_small))
 ```
 
