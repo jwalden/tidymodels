@@ -1,0 +1,179 @@
+
+---
+title: "Tidy Modeling with R: Chapter 8 (Feature Engineering with Recipes)"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+library(tidymodels)
+library(tidyverse)
+tidymodels_prefer()
+```
+
+This notebook works through the contents of chapter 8 of the book TMWR on feature engineering with recipes. Recipes can be incorporated in workflows. Feature engineering types discussed in this chapter include:
+
+  - Correlation between predictors can be reduced via feature extraction or the removal of some predictors.
+  - When some predictors have missing values, they can be imputed using a sub-model.
+  - Models that use variance-type measures may benefit from coercing the distribution of some skewed predictors to be symmetric by estimating a transformation.
+  - Scaling features to have the same numerical range.
+
+The data used is the Ames house sale price dataset, which is available from the `tidymodels` package.
+```{r data}
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+```
+
+# A simple recipe for the Ames housing dataset
+
+For our first model, we will consider only four features:
+
+  - The neighborhood (qualitative, with 29 neighborhoods in the training set)
+  - The gross above-grade living area (continuous, named Gr_Liv_Area)
+  - The year built (Year_Built)
+  - The type of building (Bldg_Type with values OneFam (n=1,936), TwoFmCon (n=50), Duplex (n=88), Twnhs (n=77), and TwnhsE (n=191))
+
+A simple linear regression model in R for this data would look like:
+```
+lm(Sale_Price ~ Neighborhood + log10(Gr_Liv_Area) + Year_Built + Bldg_Type, data = ames)
+```
+
+This formula performs the following operations:
+
+  - Sale price is defined as the outcome while neighborhood, gross living area, the year built, and building type variables are all defined as predictors.
+  - A log transformation is applied to the gross living area predictor.
+  - The neighborhood and building type columns are converted from a non-numeric format to a numeric format (since least squares requires numeric predictors).
+
+In tidymodels, we can perform this set of steps with a recipe as follows:
+```{r}
+simple_ames <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type,
+         data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_dummy(all_nominal_predictors())
+simple_ames
+```
+
+# Simple Linear Regression Workflow
+
+Workflows are a powerful way to include recipes and preprocessing steps in a single object that can be fitted and used to make predictions.
+
+A workflow always requires a `parsnip` model object, so we create a linear regression model with `parsnip`.
+```{r}
+ames_lm <-
+    linear_reg() %>%
+    set_engine("lm")
+```
+
+Let's add the model to a workflow.
+```{r}
+ames_workflow <- 
+    workflow() %>%
+    add_model(ames_lm)
+ames_workflow
+```
+
+We can add our recipe above via the `add_recipe()` method. Alternatively, we could directly add a formula via the `add_formula()` method.
+```{r}
+ames_workflow <-
+    ames_workflow %>%
+    add_recipe(simple_ames)
+ames_workflow
+```
+
+We can then fit the model through the workflow object.
+```{r}
+lm_fit <- fit(ames_workflow, ames_train)
+tidy(lm_fit)
+```
+
+Once a workflow has been fitted, we can use it to make predictions.
+```{r}
+predict(lm_fit, ames_test %>% slice(1:3))
+```
+
+We can extract the fitted recipe from the workflow as follows.
+```{r}
+lm_fit %>% extract_recipe(estimated=TRUE)
+```
+
+Both the model and preprocessor (formula) can be removed or updated. Note that the previous fitted model will be removed from the workflow object, as the new formula is inconsistent with it.
+```{r}
+lm_fit %>% update_formula(Sale_Price ~ Longitude)
+```
+
+We can build more complex recipes like the one below, which
+
+  1. Log transforms the Gr_Liv_Area predictor,
+  2. Collect neighborhoods with less than 1% into an Other category,
+     rather than having a separate dummy variable for each neighborhood,
+     even ones with zero properties.
+  3. Make dummy variables for all nominal predictor variables.
+  4. Add interaction terms to the formula for Gr_Liv_Area and all
+     predictors beginning with Bldg_Type_
+  5. Create natural spline representations for Latitude and Longitude
+     predictors using 20 terms.
+
+```{r}
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+```
+
+The `tidy` function provides a concise look at the steps and their parameters:
+
+```{r}
+tidy(ames_rec)
+```
+
+# Column Roles
+
+Recipes assign roles to each columns, depending on which side of the tilde they are on in the formula. These roles are either "predictor" or "outcome."
+
+However, there are often columns that contain data that we would like to retain in our data frame but that aren't predictors or outcomes. We can retain these columns without having to use them as predictors by setting their roles.  For example, for the house price data, the role of the street address column could be modified using:
+
+```{r}
+ames_rec %>% update_role(address, new_role = "street address")
+```
+
+After this change, the address is no longer a predictor according to the recipe. Any character string can be used as a role. Columns can have multiple roles.
+
+# Evaluating the Test Set
+
+Let's say that we've concluded our model development and have settled on a final model. There is a convenience function called `last_fit()` that will fit the model to the entire training set and evaluate it with the testing set.
+```{r}
+final_lm_res <- last_fit(ames_workflow, ames_split)
+final_lm_res
+```
+
+The `.workflow` column contains the fitted workflow and can be pulled out of the results using:
+
+```{r}
+fitted_lm_wflow <- extract_workflow(final_lm_res)
+```
+
+Similarly, `collect_metrics()` and `collect_predictions()` provide access to the performance metrics and predictions, respectively.
+
+```{r}
+collect_metrics(final_lm_res)
+```
+
+```{r}
+collect_predictions(final_lm_res) %>% slice(1:5)
+```
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 7. https://www.tmwr.org/workflows.html (2022)
+  2. Recipe steps. https://tidymodels.org/find
