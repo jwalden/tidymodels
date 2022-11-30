@@ -1,0 +1,105 @@
+
+---
+title: "Tidy Modeling with R: Chapter 9 (Model Performance)"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r performance-setup, include = FALSE}
+library(tidymodels)
+library(tidyverse)
+tidymodels_prefer()
+```
+
+This notebook works through the contents of chapter 9 of the book TMwR on model performance.
+
+The data used is the Ames house sale price dataset, which is available from the `tidymodels` package.
+```{r data}
+data(ames)
+ames <- mutate(ames, Sale_Price = log10(Sale_Price))
+
+set.seed(502)
+ames_split <- initial_split(ames, prop = 0.80, strata = Sale_Price)
+ames_train <- training(ames_split)
+ames_test  <-  testing(ames_split)
+```
+
+This chapter will demonstrate the `yardstick` package, a core tidymodels packages with the focus of measuring model performance.
+
+# Regression Metrics
+
+Two common metrics for regression models are the root mean squared error (RMSE) and the coefficient of determination (a.k.a. $R^2$). The former measures accuracy while the latter measures correlation. 
+
+We use the linear regression workflow developed in chapter 8:
+```{r ames_wf}
+ames_rec <- 
+  recipe(Sale_Price ~ Neighborhood + Gr_Liv_Area + Year_Built + Bldg_Type + 
+           Latitude + Longitude, data = ames_train) %>%
+  step_log(Gr_Liv_Area, base = 10) %>% 
+  step_other(Neighborhood, threshold = 0.01) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact( ~ Gr_Liv_Area:starts_with("Bldg_Type_") ) %>% 
+  step_ns(Latitude, Longitude, deg_free = 20)
+  
+lm_model <- linear_reg() %>% set_engine("lm")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(ames_rec)
+
+lm_fit <- fit(lm_wflow, ames_train)
+```
+
+Let's see how well the model predicts the sales price of the houses in the test dataset. We start by making predictions using test set data.
+
+```{r}
+ames_test_results <- predict(lm_fit, new_data=ames_test %>% select(-Sale_Price))
+ames_test_results
+```
+
+Let's add the actual sales prices to the results frame.
+
+```{r}
+ames_test_results <- bind_cols(ames_test_results, ames_test %>% select(Sale_Price))
+ames_test_results
+```
+
+Then plot the actual versus predicted sale prices.
+
+```{r}
+ggplot(ames_test_results, aes(x = Sale_Price, y = .pred)) + 
+  # Create a diagonal line:
+  geom_abline(lty = 2) + 
+  geom_point(alpha = 0.5) + 
+  labs(y = "Predicted Sale Price (log10)", x = "Sale Price (log10)") +
+  # Scale and size the x- and y-axis uniformly:
+  coord_obs_pred()
+```
+
+We can measure model effectiveness with the root mean squared error (RMSE):
+```{r}
+rmse(ames_test_results, truth = Sale_Price, estimate = .pred)
+```
+
+The `.workflow` column contains the fitted workflow and can be pulled out of the results using:
+
+```{r}
+fitted_lm_wflow <- extract_workflow(final_lm_res)
+```
+
+Similarly, `collect_metrics()` and `collect_predictions()` provide access to the performance metrics and predictions, respectively.
+
+```{r}
+collect_metrics(final_lm_res)
+```
+
+```{r}
+collect_predictions(final_lm_res) %>% slice(1:5)
+```
+
+
+# References
+
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 7. https://www.tmwr.org/workflows.html (2022)
