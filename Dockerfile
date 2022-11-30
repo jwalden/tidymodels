@@ -1,4 +1,4 @@
-FROM rocker/tidyverse:4.2.1
+FROM rocker/tidyverse:4.2.2
 RUN apt-get update -qq && apt-get -y --no-install-recommends install libxt6
 # install2.r errors out on multiple packages so we run R directly
 RUN R -q -e 'update.packages(ask=FALSE)'
