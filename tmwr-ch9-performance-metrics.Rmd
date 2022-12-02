@@ -78,28 +78,112 @@ ggplot(ames_test_results, aes(x = Sale_Price, y = .pred)) +
   coord_obs_pred()
 ```
 
-We can measure model effectiveness with the root mean squared error (RMSE):
+We can measure model effectiveness with the root mean squared error (RMSE). The smaller the RMSE, the more accurate the model's predictions are.
 ```{r}
 rmse(ames_test_results, truth = Sale_Price, estimate = .pred)
 ```
 
-The `.workflow` column contains the fitted workflow and can be pulled out of the results using:
-
+We can compute multiple metrics with the `metric_set()` function. Let's compute RMSE, R^2, and the mean absolute error (MAE).
 ```{r}
-fitted_lm_wflow <- extract_workflow(final_lm_res)
+ames_metrics <- metric_set(rmse, rsq, mae)
+ames_metrics(ames_test_results, truth = Sale_Price, estimate = .pred)
 ```
 
-Similarly, `collect_metrics()` and `collect_predictions()` provide access to the performance metrics and predictions, respectively.
+# Binary Classification Metrics
+
+Let's use the binary classification dataset from the `modeldata` package. The second and third columns are predicted class probabilities for the test set while predicted are predictions of which class the datum belongs to.
 
 ```{r}
-collect_metrics(final_lm_res)
+data(two_class_example)
+tibble(two_class_example)
+```
+
+The confusion matrix shows the number of true positives and true negatives on the diagonal and the number of false positives and false negatives off diagonal. 
+```{r}
+conf_mat(two_class_example, truth = truth, estimate = predicted)
+```
+
+Individual metrics can be computed with functions matching their names, which take the data frame containing the true and predicted values as an argument, along with the name of the columns where the actual and predicted values are stored.
+```{r}
+accuracy(two_class_example, truth, predicted)
+```
+
+Multiple metrics can be computed by constructing a `metric_set` as with regression metrics.
+```{r}
+classification_metrics <- metric_set(accuracy, precision, recall, f_meas)
+classification_metrics(two_class_example, truth=truth, estimate=predicted)
+```
+
+For binary classification data sets, `yardstick` functions have a standard argument called `event_level` to distinguish positive and negative levels. If this argument is not provided, `yardstick` defaults to treating the first level of the outcome factor as the positive event of interest. Note the differences in precision, recall, and F-measure when we choose the second level (Class2) as the positive outcome.
+
+```{r}
+classification_metrics(two_class_example, truth=truth, estimate=predicted, event_level="second")
+```
+
+The receiver operating characteristic (ROC) curve computes the sensitivity and specificity over a continuum of different event thresholds. 
+
+```{r}
+two_class_curve <- roc_curve(two_class_example, truth, Class1)
+two_class_curve
+```
+
+We can plot the ROC curve with `autoplot()`.
+
+```{r}
+autoplot(two_class_curve)
 ```
 
 ```{r}
-collect_predictions(final_lm_res) %>% slice(1:5)
 ```
 
+
+
+# Multiclass Classification Metrics
+
+We will use the HPC dataset for multiclass classification.
+```{r}
+data(hpc_cv)
+tibble(hpc_cv)
+```
+
+Performance metric functions for multiclass classification have are the same as those for binary classification, where that makes sense.
+```{r}
+accuracy(hpc_cv, obs, pred) 
+```
+
+Some metrics like `sensitivity` measure results based on the positive outcome. To apply such metrics to multiclass data, we need to choose a way to extend the concept of a positive class to such data. There are three options:
+
+  - Macro-averaging computes a set of one-versus-all metrics using the standard two-class statistics. These are averaged.
+  - Macro-weighted averaging does the same but the average is weighted by the number of samples in each class.
+  - Micro-averaging computes the contribution for each class, aggregates them, then computes a single metric from the aggregates.
+
+```{r}
+sensitivity(hpc_cv, obs, pred, estimator="macro")
+```
+
+```{r}
+sensitivity(hpc_cv, obs, pred, estimator="macro_weighted")
+```
+
+```{r}
+sensitivity(hpc_cv, obs, pred, estimator="micro")
+```
+
+There are multiclass analogs of probability-based metrics like ROC AUC too. All of the class probability columns must be given to the function:
+
+```{r}
+roc_auc(hpc_cv, obs, VF, F, M, L)
+```
+
+We can also visualize the ROC curve using a 1-vs-all approach, where the 1 represents the positive class. In this example, we plot the ROC curve four times, one for each of the possible classes. Since the `hpc` dataset contains folds for cross-validation, we group by `Resample` to show the ROC curve for each fold.
+
+```{r}
+hpc_cv %>% 
+  group_by(Resample) %>% 
+  roc_curve(obs, VF, F, M, L) %>% 
+  autoplot()
+```
 
 # References
 
-  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 7. https://www.tmwr.org/workflows.html (2022)
+  1. Max Kuhn and Julia Silge, _Tidy Modeling with R_, chapter 9. https://www.tmwr.org/performance.html (2022)
