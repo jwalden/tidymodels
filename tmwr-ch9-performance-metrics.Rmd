@@ -133,10 +133,18 @@ We can plot the ROC curve with `autoplot()`.
 autoplot(two_class_curve)
 ```
 
+Yardstick supports other curve types, like the precision-recall (PR) curve.
+
 ```{r}
+pr_curve <- pr_curve(two_class_example, truth, Class1)
+pr_curve
 ```
 
+We can plot the PR curve with `autoplot()`.
 
+```{r}
+autoplot(pr_curve)
+```
 
 # Multiclass Classification Metrics
 
